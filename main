@@ -1,0 +1,933 @@
+#!/usr/bin/env python3.12
+import datetime
+import json
+import pathlib
+import random
+import resource
+import socket
+import sqlite3
+import string
+import sys
+import threading
+import time
+import uuid
+
+
+class Ethernet(object):
+    def __init__(self, packet: str) -> None:
+        self.src = f'{packet[12:14]}:{packet[14:16]}:{packet[16:18]}:{packet[18:20]}:{packet[20:22]}:{packet[22:24]}'.upper()
+        self.dst = f'{packet[:2]}:{packet[2:4]}:{packet[4:6]}:{packet[6:8]}:{packet[8:10]}:{packet[10:12]}'.upper()
+        self.int_proto = int(packet[24:28], 16)
+        self.data = packet[28:]
+
+    def protocol(self) -> str:
+        if self.int_proto == 2048:  # IPv4:
+            return 'IPv4'
+        elif self.int_proto == 34525:  # IPv6:
+            return 'IPv6'
+        elif self.int_proto == 2054:  # ARP:
+            return 'ARP'
+
+    def output(self):
+        return {
+            'src': self.src,
+            'dst': self.dst,
+            'proto': self.protocol()
+        }
+
+
+class ARP(object):
+    def __init__(self, packet: str) -> None:
+        self.hardware_type = int(packet[0:4], 16)
+        self.protocol_type = int(packet[4:8], 16)
+        self.hardware_size = int(packet[8:10], 16)
+        self.protocol_size = int(packet[10:12], 16)
+        self.opcode = int(packet[12:16], 16)
+        self.sender_mac = f'{packet[16:18]}:{packet[18:20]}:{packet[20:22]}:{packet[22:24]}:{packet[24:26]}:{packet[26:28]}'.upper()
+        self.sender_ip = f'{int(packet[28:30], 16)}.{int(packet[30:32], 16)}.{int(packet[32:34], 16)}.{int(packet[34:36], 16)}'
+        self.target_mac = f'{packet[36:38]}:{packet[38:40]}:{packet[40:42]}:{packet[42:44]}:{packet[44:46]}:{packet[46:48]}'.upper()
+        self.target_ip = f'{int(packet[48:50], 16)}.{int(packet[50:52], 16)}.{int(packet[52:54], 16)}.{int(packet[54:56], 16)}'
+
+    def output(self):
+        return {
+            'hardware_type': str(self.hardware_type),
+            'protocol_type': str(self.protocol_type),
+            'hardware_size': str(self.hardware_size),
+            'protocol_size': str(self.protocol_size),
+            'opcode': str(self.opcode),
+            'sender_mac': self.sender_mac,
+            'sender_ip': self.sender_ip,
+            'target_mac': self.target_mac,
+            'target_ip': self.target_ip
+        }
+
+
+class IPv4(object):
+    """
+        IPv4
+        0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |Version|  IHL  |Type of Service|          Total Length         |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |         Identification        |Flags|      Fragment Offset    |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |  Time to Live |    Protocol   |         Header Checksum       |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                       Source Address                          |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                    Destination Address                        |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                    Options                    |    Padding    |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    """
+
+    def __init__(self, packet: str) -> None:
+        self.version = int(packet[0], 16)
+        self.header_length = int(packet[1], 16)
+        self.service_type = int(packet[2:4], 16)
+        self.service_prioridad = (self.service_type & 0b11100000) >> 5
+        self.service_retardo = (self.service_type & 0b00010000) >> 4
+        self.service_rendimiento = (self.service_type & 0b00001000) >> 3
+        self.service_fiabilidad = (self.service_type & 0b00000100) >> 2
+        self.service_reservados = self.service_type & 0b00000011
+        self.length = int(packet[4:8], 16)
+        self.identification = int(packet[8:12], 16)
+        self.flags = int(packet[12], 16)
+        self.flags_res = (self.flags & 0b1000) >> 3
+        self.flags_div = (self.flags & 0b0100) >> 2
+        self.flags_mf = (self.flags & 0b0010) >> 1
+        self.fragment_offset = int(packet[12:16], 16) & 0b0001111111111111
+        self.ttl = int(packet[16:18], 16)
+        self.int_proto = int(packet[18:20], 16)
+        self.checksum = int(packet[20:24], 16)
+        self.src = f'{int(packet[24:26], 16)}.{int(packet[26:28], 16)}.{int(packet[28:30], 16)}.{int(packet[30:32], 16)}'
+        self.dst = f'{int(packet[32:34], 16)}.{int(packet[34:36], 16)}.{int(packet[36:38], 16)}.{int(packet[38:40], 16)}'
+        self.data = packet[40:]
+
+    def output(self):
+        return {
+            'version': str(self.version),
+            'header_length': str(self.header_length),
+            'service_type': str(self.service_type),
+            'service_prioridad': str(self.service_prioridad),
+            'service_retardo': str(self.service_retardo),
+            'service_rendimiento': str(self.service_rendimiento),
+            'service_fiabilidad': str(self.service_fiabilidad),
+            'service_reservados': str(self.service_reservados),
+            'length': str(self.length),
+            'identification': str(self.identification),
+            'flags': str(self.flags),
+            'flags_res': str(self.flags_res),
+            'flags_div': str(self.flags_div),
+            'flags_mf': str(self.flags_mf),
+            'fragment_offset': str(self.fragment_offset),
+            'ttl': str(self.ttl),
+            'proto': self.protocol(),
+            'checksum': str(self.checksum),
+            'src': str(self.src),
+            'dst': str(self.dst),
+        }
+
+    def protocol(self) -> str:
+        if self.int_proto == 1:
+            return 'ICMPv4'
+        elif self.int_proto == 6:
+            return 'TCP'
+        elif self.int_proto == 17:
+            return 'UDP'
+
+
+class IPv6(object):
+    def __init__(self, packet: str) -> None:
+        self.version = int(packet[0], 16)
+        self.traffic_class = int(packet[1:8], 16) & 0b00001111111100000000000000000000 >> 20
+        self.differentiated_services_codepoint = int(packet[1:8], 16) & 0b00001111110000000000000000000000 >> 22
+        self.explicit_congestion_notification = int(packet[1:8], 16) & 0b00000000001100000000000000000000 >> 20
+        self.flow_label = int(packet[1:8], 16) & 0b00001111111111111111111111111111
+        self.payload_length = int(packet[8:12], 16)
+        self.next_header = int(packet[12:14], 16)
+        self.hop_limit = int(packet[14:16], 16)
+        self.src = f'{packet[16:20]}:{packet[20:24]}:{packet[24:28]}:{packet[28:32]}:{packet[32:36]}:{packet[36:40]}:{packet[40:44]}:{packet[44:48]}'
+        self.dst = f'{packet[48:52]}:{packet[52:56]}:{packet[56:60]}:{packet[60:64]}:{packet[64:68]}:{packet[68:72]}:{packet[72:76]}:{packet[76:80]}'
+        # output['ipv6.next_header'] = int(templates[80:82], 16)
+        self.length = int(packet[82:84], 16)
+        self.router_alert_action = int(packet[84:86], 16) & 0b11000000 >> 6
+        self.router_alert_may_change = int(packet[84:86], 16) & 0b00100000 >> 5
+        self.router_alert_low_order_bits = int(packet[84:86], 16) & 0b00011111
+        self.router_alert_length = int(packet[86:88], 16)
+        self.router_alert = int(packet[88:102], 16)
+
+        self.padn_type_action = int(packet[102:104], 16) & 0b11000000 >> 6 if len(packet) >= 104 else None
+        self.padn_type_may_change = int(packet[102:104], 16) & 0b00100000 >> 5 if len(packet) >= 104 else None
+        self.padn_type_low_order_bits = int(packet[102:104], 16) & 0b00011111 if len(packet) >= 104 else None
+        self.padn_length = int(packet[104:106], 16) if len(packet) >= 106 else None
+        # self.data = bytes.fromhex(templates[106:]).decode(encoding='utf-8', errors='backslashreplace')
+        self.data = bytes.fromhex(packet[106:]).decode(encoding='utf-8', errors='ignore') if len(packet) >= 106 else ''
+        self.data = ''.join([char if char.isalnum() or char in ('\r',
+                                                                '\n',
+                                                                '\t',
+                                                                ' ',
+                                                                '/',
+                                                                '*',
+                                                                '"',
+                                                                '(',
+                                                                ')',
+                                                                ',',
+                                                                '-',
+                                                                '_',
+                                                                ';',
+                                                                '=',
+                                                                '{',
+                                                                '}',
+                                                                ':',
+                                                                '?',
+                                                                '!',
+                                                                '[',
+                                                                ']') else '.' for char
+                             in self.data])
+
+    def output(self):
+        return {
+            'version': str(self.version),
+            'traffic_class': str(self.traffic_class),
+            'differentiated_services_codepoint': str(self.differentiated_services_codepoint),
+            'explicit_congestion_notification': str(self.explicit_congestion_notification),
+            'flow_label': str(self.flow_label),
+            'payload_length': str(self.payload_length),
+            'next_header': str(self.next_header),
+            'hop_limit': str(self.hop_limit),
+            'src': str(self.src),
+            'dst': str(self.dst),
+            'length': str(self.length),
+            'router_alert_action': str(self.router_alert_action),
+            'router_alert_may_change': str(self.router_alert_may_change),
+            'router_alert_low_order_bits': str(self.router_alert_low_order_bits),
+            'router_alert_length': str(self.router_alert_length),
+            'router_alert': str(self.router_alert),
+            'padn_type_action': str(self.padn_type_action),
+            'padn_type_may_change': str(self.padn_type_may_change),
+            'padn_type_low_order_bits': str(self.padn_type_low_order_bits),
+            'padn_length': str(self.padn_length),
+            'data': str(self.data),
+        }
+
+
+class ICMPv4(object):
+    def __init__(self, packet: str) -> None:
+        self.type = int(packet[:2], 16)
+        self.code = int(packet[2:4], 16)
+        self.checksum = int(packet[4:8], 16)
+        self.identifier = int(packet[8:12], 16)
+        self.sequence = int(packet[12:16], 16)
+        self.timestamp = int(packet[16:32], 16)
+        self.data = bytes.fromhex(packet[32:]).decode(encoding='utf-8', errors='ignore')
+        self.data = ''.join([char if char.isalnum() or char in ('\r',
+                                                                '\n',
+                                                                '\t',
+                                                                ' ',
+                                                                '/',
+                                                                '*',
+                                                                '"',
+                                                                '(',
+                                                                ')',
+                                                                ',',
+                                                                '-',
+                                                                '_',
+                                                                ';',
+                                                                '=',
+                                                                '{',
+                                                                '}',
+                                                                ':',
+                                                                '?',
+                                                                '!',
+                                                                '[',
+                                                                ']') else '.' for char
+                             in self.data])
+
+    def output(self):
+        return {
+            'type': str(self.type),
+            'code': str(self.code),
+            'checksum': str(self.checksum),
+            'identifier': str(self.identifier),
+            'sequence': str(self.sequence),
+            'timestamp': str(self.timestamp),
+            'data': str(self.data),
+        }
+
+
+class TCP(object):
+    """
+        TCP
+        0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |          Source Port          |       Destination Port        |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                        Sequence Number                        |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                    Acknowledgment Number                      |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |  Data |           |U|A|P|R|S|F|                               |
+       | Offset| Reserved  |R|C|S|S|Y|I|            Window             |
+       |       |           |G|K|H|T|N|N|                               |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |           Checksum            |         Urgent Pointer        |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                    Options                    |    Padding    |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+       |                             data                              |
+       +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    """
+
+    def __init__(self, packet: str) -> None:
+        self.src = int(packet[:4], 16)
+        self.dst = int(packet[4:8], 16)
+        self.secuencia_numero = int(packet[8:16], 16)
+        self.acuse_recibo = int(packet[16:24], 16)
+        self.header_length = int(packet[25], 16)
+        self.reservado = (int(packet[26], 16) & 0b1110) >> 1
+        self.ns = (int(packet[26], 16) & 0b0001)
+        self.cwr = (int(packet[27], 16) & 0b1000) >> 3
+        self.ece = (int(packet[27], 16) & 0b0100) >> 2
+        self.urg = (int(packet[27], 16) & 0b0010) >> 1
+        self.psh = (int(packet[28], 16) & 0b1000) >> 3
+        self.rst = (int(packet[28], 16) & 0b0100) >> 2
+        self.syn = (int(packet[28], 16) & 0b0010) >> 1
+        self.fin = (int(packet[28], 16) & 0b0001)
+        self.window_length = int(packet[28:32], 16)
+        self.checksum = int(packet[32:36], 16)
+        self.urgente_point = int(packet[36:40], 16)
+        self.tmp = packet[40:64]
+        # self.data = bytes.fromhex(templates[64:]).decode(encoding='utf-8', errors='backslashreplace')
+        # self.data = bytes.fromhex(templates[106:]).decode(encoding='utf-8', errors='backslashreplace').replace('�','.')
+
+        self.data = bytes.fromhex(packet[64:]).decode(encoding='utf-8', errors='ignore')
+        self.data = ''.join([char if char.isalnum() or char in (
+            '\r', '\n', '\t', ' ', '/', '*', '"', '(', ')', ',', '-', '_', ';', '=', '{', '}', ':', '?', '!', '[',
+            ']') else '.' for char in self.data])
+
+    def output(self):
+        return {
+            'src': str(self.src),
+            'dst': str(self.dst),
+            'secuencia_numero': str(self.secuencia_numero),
+            'acuse_recibo': str(self.acuse_recibo),
+            'header_length': str(self.header_length),
+            'reservado': str(self.reservado),
+            'ns': str(self.ns),
+            'cwr': str(self.cwr),
+            'ece': str(self.ece),
+            'urg': str(self.urg),
+            'psh': str(self.psh),
+            'rst': str(self.rst),
+            'syn': str(self.syn),
+            'fin': str(self.fin),
+            'window_length': str(self.window_length),
+            'checksum': str(self.checksum),
+            'urgente_point': str(self.urgente_point),
+            'data': str(self.data),
+        }
+
+
+class UDP(object):
+    """
+         UDP
+         0      7 8     15 16    23 24    31
+        +--------+--------+--------+--------+
+        |          source address           |
+        +--------+--------+--------+--------+
+        |        destination address        |
+        +--------+--------+--------+--------+
+        |  zero  |protocol|   UDP length    |
+        +--------+--------+--------+--------+
+    """
+
+    def __init__(self, packet: str) -> None:
+        self.src = int(packet[:4], 16)
+        self.dst = int(packet[4:8], 16)
+        self.length = int(packet[8:12], 16)
+        self.checksum = int(packet[12:16], 16)
+        # self.data = bytes.fromhex(templates[16:]).decode(encoding='utf-8', errors='backslashreplace')
+
+        self.data = bytes.fromhex(packet[16:]).decode(encoding='utf-8', errors='ignore')
+        self.data = ''.join([char if char.isalnum() or char in ('\r',
+                                                                '\n',
+                                                                '\t',
+                                                                ' ',
+                                                                '/',
+                                                                '*',
+                                                                '"',
+                                                                '(',
+                                                                ')',
+                                                                ',',
+                                                                '-',
+                                                                '_',
+                                                                ';',
+                                                                '=',
+                                                                '{',
+                                                                '}',
+                                                                ':',
+                                                                '?',
+                                                                '!',
+                                                                '[',
+                                                                ']') else '.' for char
+                             in self.data])
+
+    def output(self):
+        return {
+            'src': str(self.src),
+            'dst': str(self.dst),
+            'length': str(self.length),
+            'checksum': str(self.checksum),
+            'data': str(self.data),
+        }
+
+
+class Config(object):
+    def __init__(self, config: dict):
+        self.config: dict = config
+
+    def sniffer_cache_timeout(self) -> int:
+        return self.config['sniffer']['cache']['timeout']
+
+    def sniffer_database_timeout(self) -> int:
+        return self.config['sniffer']['database']['timeout']
+
+    def sniffer_database_path(self) -> str:
+        return self.config['sniffer']['database']['path']
+
+
+class Sniffer(threading.Thread):
+    def __init__(self, config: Config):
+        super(Sniffer, self).__init__()
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
+        self.config: Config = config
+        self.cache = sqlite3.connect(database=":memory:",
+                                     timeout=self.config.sniffer_cache_timeout(),
+                                     check_same_thread=False)
+        self.database = sqlite3.connect(database=self.config.sniffer_database_path(),
+                                        timeout=self.config.sniffer_database_timeout(),
+                                        check_same_thread=False)
+        self.running = True
+        self.lock = threading.Lock()
+
+    def memory_db(self):
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA cache_size = -2000")  # Aumenta el caché a 2MB
+        conn.execute("PRAGMA locking_mode = EXCLUSIVE")
+        conn.execute("PRAGMA temp_store = MEMORY")
+        return conn
+
+    def table_data(self):
+        cursor_cache = self.cache.cursor()
+        cursor_cache.execute(
+            "CREATE TABLE IF NOT EXISTS packets (id INTEGER PRIMARY KEY AUTOINCREMENT,packet TEXT NOT NULL,capture TEXT, timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')) );")
+        cursor_cache.execute("PRAGMA journal_mode = WAL")
+        cursor_cache.execute("PRAGMA synchronous = FULL")
+        cursor_cache.execute("PRAGMA cache_size = 10000")
+        cursor_cache.execute("PRAGMA temp_store = MEMORY")
+        self.cache.commit()
+        cursor_cache.close()
+        cursor_database = self.database.cursor()
+        cursor_database.execute(
+            "CREATE TABLE IF NOT EXISTS ethernet (id INTEGER PRIMARY KEY AUTOINCREMENT,src TEXT NOT NULL,dst TEXT NOT NULL,proto TEXT NOT NULL,data TEXT NOT NULL,capture TEXT,timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')));")
+        cursor_database.execute(
+            "CREATE TABLE IF NOT EXISTS icmpv4 (id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT NOT NULL,sequence TEXT NOT NULL,ttl TEXT NOT NULL,src_mac TEXT NOT NULL,dst_mac TEXT NOT NULL,src_ip TEXT NOT NULL,dst_ip TEXT NOT NULL,data TEXT NOT NULL,capture TEXT,timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')));")
+        cursor_database.execute(
+            "CREATE TABLE IF NOT EXISTS tcp (id INTEGER PRIMARY KEY AUTOINCREMENT,ttl TEXT NOT NULL,src_mac TEXT NOT NULL,src_ip TEXT NOT NULL,src_port TEXT NOT NULL,dst_mac TEXT NOT NULL,dst_ip TEXT NOT NULL,dst_port TEXT NOT NULL,data TEXT NOT NULL,capture TEXT,timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')));")
+        cursor_database.execute(
+            "CREATE TABLE IF NOT EXISTS udp (id INTEGER PRIMARY KEY AUTOINCREMENT,ttl TEXT NOT NULL,src_mac TEXT NOT NULL,src_ip TEXT NOT NULL,src_port TEXT NOT NULL,dst_mac TEXT NOT NULL,dst_ip TEXT NOT NULL,dst_port TEXT NOT NULL,data TEXT NOT NULL,capture TEXT,timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')));")
+        cursor_database.execute(
+            "CREATE TABLE IF NOT EXISTS ipv4 (id INTEGER PRIMARY KEY AUTOINCREMENT,ttl TEXT NOT NULL,src_mac TEXT NOT NULL,dst_mac TEXT NOT NULL,src_ip TEXT NOT NULL,dst_ip TEXT NOT NULL,data TEXT NOT NULL,capture TEXT,timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')));")
+        cursor_database.execute(
+            "CREATE TABLE IF NOT EXISTS ipv6 (id INTEGER PRIMARY KEY AUTOINCREMENT,src_mac TEXT NOT NULL,dst_mac TEXT NOT NULL,src_ip TEXT NOT NULL,dst_ip TEXT NOT NULL,data TEXT NOT NULL,capture TEXT,timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')));")
+        cursor_database.execute(
+            "CREATE TABLE IF NOT EXISTS arp (id INTEGER PRIMARY KEY AUTOINCREMENT,src_mac TEXT NOT NULL,dst_mac TEXT NOT NULL,sender_mac TEXT NOT NULL,sender_ip TEXT NOT NULL,target_mac TEXT NOT NULL,target_ip TEXT NOT NULL,capture TEXT,timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now')));")
+        cursor_database.execute("PRAGMA journal_mode = WAL")
+        cursor_database.execute("PRAGMA synchronous = FULL")
+        cursor_database.execute("PRAGMA cache_size = 10000")
+        cursor_database.execute("PRAGMA temp_store = MEMORY")
+        self.database.commit()
+        cursor_database.close()
+
+    def table_trigger(self, rotate: int = 1000000):
+        cursor_cache = self.cache.cursor()
+        cursor_cache.execute(
+            "CREATE TRIGGER IF NOT EXISTS limit_packets AFTER INSERT ON packets WHEN (SELECT COUNT(*) FROM packets) > {} BEGIN DELETE FROM packets WHERE id IN ( SELECT id FROM packets ORDER BY timestamp ASC LIMIT (SELECT COUNT(*) - {} FROM packets) ); END;".format(
+                rotate, rotate))
+        self.cache.commit()
+        cursor_cache.close()
+        cursor_database = self.database.cursor()
+        cursor_database.execute(
+            "CREATE TRIGGER IF NOT EXISTS limit_ethernet AFTER INSERT ON ethernet WHEN (SELECT COUNT(*) FROM ethernet) > {} BEGIN DELETE FROM ethernet WHERE id IN ( SELECT id FROM ethernet ORDER BY timestamp ASC LIMIT (SELECT COUNT(*) - {} FROM ethernet) ); END;".format(
+                rotate, rotate))
+
+        cursor_database.execute(
+            "CREATE TRIGGER IF NOT EXISTS limit_icmpv4 AFTER INSERT ON icmpv4 WHEN (SELECT COUNT(*) FROM icmpv4) > {} BEGIN DELETE FROM icmpv4 WHERE id IN ( SELECT id FROM icmpv4 ORDER BY timestamp ASC LIMIT (SELECT COUNT(*) - {} FROM icmpv4) ); END;".format(
+                rotate, rotate))
+
+        cursor_database.execute(
+            "CREATE TRIGGER IF NOT EXISTS limit_tcp AFTER INSERT ON tcp WHEN (SELECT COUNT(*) FROM tcp) > {} BEGIN DELETE FROM tcp WHERE id IN ( SELECT id FROM tcp ORDER BY timestamp ASC LIMIT (SELECT COUNT(*) - {} FROM tcp) ); END;".format(
+                rotate, rotate))
+
+        cursor_database.execute(
+            "CREATE TRIGGER IF NOT EXISTS limit_udp AFTER INSERT ON udp WHEN (SELECT COUNT(*) FROM udp) > {} BEGIN DELETE FROM udp WHERE id IN ( SELECT id FROM udp ORDER BY timestamp ASC LIMIT (SELECT COUNT(*) - {} FROM udp) ); END;".format(
+                rotate, rotate))
+
+        cursor_database.execute(
+            "CREATE TRIGGER IF NOT EXISTS limit_ipv4 AFTER INSERT ON ipv4 WHEN (SELECT COUNT(*) FROM ipv4) > {} BEGIN DELETE FROM ipv4 WHERE id IN ( SELECT id FROM ipv4 ORDER BY timestamp ASC LIMIT (SELECT COUNT(*) - {} FROM ipv4) ); END;".format(
+                rotate, rotate))
+
+        cursor_database.execute(
+            "CREATE TRIGGER IF NOT EXISTS limit_ipv6 AFTER INSERT ON ipv6 WHEN (SELECT COUNT(*) FROM ipv6) > {} BEGIN DELETE FROM ipv6 WHERE id IN ( SELECT id FROM ipv6 ORDER BY timestamp ASC LIMIT (SELECT COUNT(*) - {} FROM ipv6) ); END;".format(
+                rotate, rotate))
+
+        cursor_database.execute(
+            "CREATE TRIGGER IF NOT EXISTS limit_arp AFTER INSERT ON arp WHEN (SELECT COUNT(*) FROM arp) > {} BEGIN DELETE FROM arp WHERE id IN ( SELECT id FROM arp ORDER BY timestamp ASC LIMIT (SELECT COUNT(*) - {} FROM arp) ); END;".format(
+                rotate, rotate))
+        self.database.commit()
+        cursor_database.close()
+        # cursor.execute('PRAGMA synchronous;')
+        # print(cursor.fetchone())
+
+    def table_count(self):
+        cursor_database = self.database.cursor()
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS udp_ttl (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS udp_src_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS udp_dst_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS udp_src_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS udp_dst_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS udp_src_port (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS udp_dst_port (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS udp_data (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS icmpv4_type (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS icmpv4_sequence (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS icmpv4_ttl (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS icmpv4_src_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS icmpv4_dst_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS icmpv4_src_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS icmpv4_dst_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS icmpv4_data (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ethernet_src (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ethernet_dst (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ethernet_proto (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ethernet_data (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_ttl (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_src_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_dst_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_src_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_dst_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_data (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS tcp_ttl (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS tcp_src_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS tcp_dst_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS tcp_src_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS tcp_dst_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS tcp_src_port (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS tcp_dst_port (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS tcp_data (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_ttl (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_src_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_dst_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_src_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_dst_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv4_data (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv6_src_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv6_dst_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv6_src_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv6_dst_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS ipv6_data (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS arp_src_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS arp_dst_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS arp_sender_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS arp_sender_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS arp_target_mac (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+        cursor_database.execute("CREATE TABLE IF NOT EXISTS arp_target_ip (valor TEXT UNIQUE, cont INTEGER DEFAULT 1)")
+
+
+        self.database.commit()
+        cursor_database.close()
+
+    def insert_icmp4(self, ethernet: Ethernet, icmpv4: ICMPv4, ipv4: IPv4, timestamp: str):
+        cursor = self.database.cursor()
+        try:
+            cursor.execute('INSERT INTO icmpv4 ('
+                           'type,sequence,ttl,src_mac,dst_mac,src_ip,dst_ip,data,capture) '
+                           'VALUES (?,?,?,?,?,?,?,?,?);', (
+                               icmpv4.type,
+                               icmpv4.sequence,
+                               ipv4.ttl,
+                               ethernet.src,
+                               ethernet.dst,
+                               ipv4.src,
+                               ipv4.dst,
+                               icmpv4.data,
+                               timestamp
+                           ))
+            cursor.execute(
+                'INSERT INTO icmpv4_type (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (icmpv4.type,))
+            cursor.execute(
+                'INSERT INTO icmpv4_sequence (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (icmpv4.sequence,))
+            cursor.execute(
+                'INSERT INTO icmpv4_ttl (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ipv4.ttl,))
+            cursor.execute(
+                'INSERT INTO icmpv4_src_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ethernet.src,))
+            cursor.execute(
+                'INSERT INTO icmpv4_dst_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ethernet.dst,))
+            cursor.execute(
+                'INSERT INTO icmpv4_src_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ipv4.src,))
+            cursor.execute(
+                'INSERT INTO icmpv4_dst_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ipv4.dst,))
+            cursor.execute(
+                'INSERT INTO icmpv4_data (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (icmpv4.data,))
+
+            self.database.commit()
+        except sqlite3.Error as e:
+            self.database.rollback()
+        except sqlite3.OperationalError as e:
+            self.database.rollback()
+        finally:
+            cursor.close()
+
+    def insert_tcp(self, ethernet: Ethernet, ipv4: IPv4, tcp: TCP, timestamp: str):
+        cursor = self.database.cursor()
+        try:
+            cursor.execute('INSERT INTO tcp ('
+                           'ttl,src_mac,src_ip,src_port,dst_mac,dst_ip,dst_port,data,capture) '
+                           'VALUES (?,?,?,?,?,?,?,?,?);', (
+                               ipv4.ttl,
+                               ethernet.src,
+                               ipv4.src,
+                               tcp.src,
+                               ethernet.dst,
+                               ipv4.dst,
+                               tcp.dst,
+                               tcp.data,
+                               timestamp
+                           ))
+            cursor.execute('INSERT INTO tcp_ttl (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv4.ttl,))
+            cursor.execute('INSERT INTO tcp_src_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ethernet.src,))
+            cursor.execute('INSERT INTO tcp_dst_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ethernet.dst,))
+            cursor.execute('INSERT INTO tcp_src_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv4.src,))
+            cursor.execute('INSERT INTO tcp_dst_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv4.dst,))
+            cursor.execute('INSERT INTO tcp_src_port (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(tcp.src,))
+            cursor.execute('INSERT INTO tcp_dst_port (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(tcp.dst,))
+            cursor.execute('INSERT INTO tcp_data (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(tcp.data,))
+            self.database.commit()
+        except sqlite3.Error as e:
+            self.database.rollback()
+        except sqlite3.OperationalError as e:
+            self.database.rollback()
+        finally:
+            cursor.close()
+
+    def insert_udp(self, ethernet: Ethernet, ipv4: IPv4, udp: UDP, timestamp: str):
+        cursor = self.database.cursor()
+        try:
+            cursor.execute('INSERT INTO udp ('
+                           'ttl,src_mac,src_ip,src_port,dst_mac,dst_ip,dst_port,data,capture) '
+                           'VALUES (?,?,?,?,?,?,?,?,?);', (
+                               ipv4.ttl,
+                               ethernet.src,
+                               ipv4.src,
+                               udp.src,
+                               ethernet.dst,
+                               ipv4.dst,
+                               udp.dst,
+                               udp.data,
+                               timestamp
+                           ))
+            cursor.execute('INSERT INTO udp_ttl (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv4.ttl,))
+            cursor.execute('INSERT INTO udp_src_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ethernet.src,))
+            cursor.execute('INSERT INTO udp_dst_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ethernet.dst,))
+            cursor.execute('INSERT INTO udp_src_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv4.src,))
+            cursor.execute('INSERT INTO udp_dst_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv4.dst,))
+            cursor.execute('INSERT INTO udp_src_port (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(udp.src,))
+            cursor.execute('INSERT INTO udp_dst_port (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(udp.dst,))
+            cursor.execute('INSERT INTO udp_data (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(udp.data,))
+            self.database.commit()
+        except sqlite3.Error as e:
+            print(e)
+            self.database.rollback()
+        except sqlite3.OperationalError as e:
+            print(e)
+            self.database.rollback()
+        finally:
+            cursor.close()
+
+    def insert_ipv4(self, ethernet: Ethernet, ipv4: IPv4, timestamp: str):
+        cursor = self.database.cursor()
+        try:
+            cursor.execute('INSERT INTO ipv4 ('
+                           'ttl,src_mac,dst_mac,src_ip,dst_ip,data,capture) '
+                           'VALUES (?,?,?,?,?,?,?);', (
+                               ipv4.ttl,
+                               ethernet.src,
+                               ethernet.dst,
+                               ipv4.src,
+                               ipv4.dst,
+                               ipv4.data,
+                               timestamp
+                           ))
+            cursor.execute('INSERT INTO ipv4_src_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ethernet.src,))
+            cursor.execute('INSERT INTO ipv4_dst_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ethernet.dst,))
+            cursor.execute('INSERT INTO ipv4_src_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv4.src,))
+            cursor.execute('INSERT INTO ipv4_dst_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv4.dst,))
+            cursor.execute('INSERT INTO ipv4_data (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv4.data,))
+            self.database.commit()
+        except sqlite3.Error as e:
+            self.database.rollback()
+        except sqlite3.OperationalError as e:
+            self.database.rollback()
+        finally:
+            cursor.close()
+
+    def insert_ipv6(self, ethernet: Ethernet, ipv6: IPv6, timestamp: str):
+        cursor = self.database.cursor()
+        try:
+            cursor.execute('INSERT INTO ipv6 ('
+                           'src_mac,dst_mac,src_ip,dst_ip,data,capture) '
+                           'VALUES (?,?,?,?,?,?);', (
+                               ethernet.src,
+                               ethernet.dst,
+                               ipv6.src,
+                               ipv6.dst,
+                               ipv6.data,
+                               timestamp
+                           ))
+            cursor.execute('INSERT INTO ipv6_src_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ethernet.src,))
+            cursor.execute('INSERT INTO ipv6_dst_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ethernet.dst,))
+            cursor.execute('INSERT INTO ipv6_src_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv6.src,))
+            cursor.execute('INSERT INTO ipv6_dst_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv6.dst,))
+            cursor.execute('INSERT INTO ipv6_data (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',(ipv6.data,))
+            self.database.commit()
+        except sqlite3.Error as e:
+            self.database.rollback()
+        except sqlite3.OperationalError as e:
+            self.database.rollback()
+        finally:
+            cursor.close()
+
+    def insert_arp(self, ethernet: Ethernet, arp: ARP, timestamp: str):
+        cursor = self.database.cursor()
+        try:
+            cursor.execute('INSERT INTO arp ('
+                           'src_mac,dst_mac,sender_mac,sender_ip,target_mac,target_ip,capture) '
+                           'VALUES (?,?,?,?,?,?,?);', (
+                               ethernet.src,
+                               ethernet.dst,
+                               arp.sender_mac,
+                               arp.sender_ip,
+                               arp.target_mac,
+                               arp.target_ip,
+                               timestamp
+                           ))
+            cursor.execute(
+                'INSERT INTO arp_src_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ethernet.src,))
+            cursor.execute(
+                'INSERT INTO arp_dst_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ethernet.dst,))
+            cursor.execute(
+                'INSERT INTO arp_sender_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (arp.sender_mac,))
+            cursor.execute(
+                'INSERT INTO arp_sender_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (arp.sender_ip,))
+            cursor.execute(
+                'INSERT INTO arp_target_mac (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (arp.target_mac,))
+            cursor.execute(
+                'INSERT INTO arp_target_ip (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (arp.target_ip,))
+
+            self.database.commit()
+        except sqlite3.Error as e:
+            self.database.rollback()
+        except sqlite3.OperationalError as e:
+            self.database.rollback()
+        finally:
+            cursor.close()
+
+    def insert_ethernet(self, ethernet: Ethernet, timestamp: str):
+        cursor = self.database.cursor()
+        try:
+            cursor.execute('INSERT INTO ethernet ('
+                           'src,dst,proto,data,capture) '
+                           'VALUES (?,?,?,?,?);', (
+                               ethernet.src,
+                               ethernet.dst,
+                               ethernet.protocol(),
+                               ethernet.data,
+                               timestamp
+                           ))
+            cursor.execute(
+                'INSERT INTO ethernet_src (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ethernet.src,))
+            cursor.execute(
+                'INSERT INTO ethernet_dst (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ethernet.dst,))
+            cursor.execute(
+                'INSERT INTO ethernet_proto (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ethernet.protocol(),))
+            cursor.execute(
+                'INSERT INTO ethernet_data (valor,cont) VALUES (?,1) ON CONFLICT(valor) DO UPDATE SET cont = cont + 1;',
+                (ethernet.data,))
+            self.database.commit()
+        except sqlite3.Error as e:
+            self.database.rollback()
+        except sqlite3.OperationalError as e:
+            self.database.rollback()
+        finally:
+            cursor.close()
+
+    def stop(self):
+        self.running = False
+
+    def generate_id(self) -> str:
+        return str(uuid.uuid4())
+
+    def generate_token(self, longitud: int = 32):
+        caracteres = string.ascii_letters + string.digits + string.punctuation
+        token = ''.join(random.choice(caracteres) for _ in range(longitud))
+        return token.encode('utf8').hex()
+
+    def run(self):
+        self.table_data()
+        self.table_trigger()
+        self.table_count()
+        threading.Thread(target=self.task).start()
+        threading.Thread(target=self.monitor).start()
+        sniff = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003))
+        try:
+            while self.running:
+                packet, info = sniff.recvfrom(65565)
+                interface, proto_level_3, packet_type, interface_index, mac = info
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+                threading.Thread(target=self.capture,
+                                 args=(timestamp, interface, proto_level_3, packet_type, interface_index, mac,
+                                       packet.hex())).start()
+        except KeyboardInterrupt:
+            pass
+
+    def capture(self, timestamp, interface, proto_level_3, packet_type, interface_index, mac, packet):
+        retries = 5
+        delay = 0.2
+        while retries > 0:
+            self.lock.acquire(blocking=True, timeout=100)
+            cursor = self.cache.cursor()
+            try:
+                cursor.execute('INSERT INTO packets (packet,capture) VALUES (?,?);', (packet, timestamp))
+                self.cache.commit()
+                retries = 0
+            except ZeroDivisionError:
+                retries = retries - 1
+                self.cache.rollback()
+                time.sleep(delay)
+            finally:
+                self.lock.release()
+                cursor.close()
+
+    def monitor(self):
+        while True:
+            cursor = self.cache.cursor()
+            try:
+                cursor.execute('SELECT COUNT(*) FROM packets;')
+                print(threading.active_count(), cursor.fetchone()[0])
+            except ZeroDivisionError as e:
+                print(e)
+            finally:
+                cursor.close()
+                time.sleep(4)
+
+    def task(self):
+        while True:
+            self.lock.acquire(blocking=True, timeout=10)
+            cursor = self.cache.cursor()
+            packet = None
+            timestamp = None
+            try:
+                cursor.execute('SELECT * FROM packets ORDER BY packets.timestamp LIMIT 1;')
+                row = cursor.fetchone()
+                if row:
+                    packet = row[1]
+                    timestamp = row[2]
+                    cursor.execute('DELETE FROM packets WHERE id=?;', (row[0],))
+                    self.cache.commit()
+            except ZeroDivisionError:
+                self.cache.rollback()
+            finally:
+                self.lock.release()
+                cursor.close()
+            try:
+                if packet:
+                    ethernet: Ethernet = Ethernet(packet=packet)
+                    if ethernet.protocol() == 'IPv4':
+                        ipv4: IPv4 = IPv4(packet=ethernet.data)
+                        if ipv4.protocol() == 'ICMPv4':
+                            icmpv4: ICMPv4 = ICMPv4(packet=ipv4.data)
+                            self.insert_icmp4(ethernet, icmpv4, ipv4, timestamp)
+                        elif ipv4.protocol() == 'TCP':
+                            tcp: TCP = TCP(packet=ipv4.data)
+                            self.insert_tcp(ethernet, ipv4, tcp, timestamp)
+                        elif ipv4.protocol() == 'UDP':
+                            udp: UDP = UDP(packet=ipv4.data)
+                            self.insert_udp(ethernet, ipv4, udp, timestamp)
+                        else:
+                            self.insert_ipv4(ethernet, ipv4, timestamp)
+                    elif ethernet.protocol() == 'IPv6':
+                        ipv6: IPv6 = IPv6(packet=ethernet.data)
+                        self.insert_ipv6(ethernet, ipv6, timestamp)
+                    elif ethernet.protocol() == 'ARP':
+                        arp: ARP = ARP(packet=ethernet.data)
+                        self.insert_arp(ethernet, arp, timestamp)
+                    else:
+                        self.insert_ethernet(ethernet, timestamp)
+            except ZeroDivisionError as e:
+                print(e)
+            finally:
+                pass  # time.sleep(0.01)
+
+
+if __name__ == '__main__':
+    print(resource.getrlimit(resource.RLIMIT_CPU))
+    print(resource.getrlimit(resource.RLIMIT_FSIZE))
+    print(resource.getrlimit(resource.RLIMIT_DATA))
+    print(resource.getrlimit(resource.RLIMIT_STACK))
+    print(resource.getrlimit(resource.RLIMIT_RSS))
+    print(resource.getrlimit(resource.RLIMIT_NPROC))
+    print(resource.getrlimit(resource.RLIMIT_NOFILE))
+
+    # LIMIT CPU
+    # limit = 1  # 1segundo
+    # resource.setrlimit(resource.RLIMIT_CPU, (limit, limit))
+
+    # LIMIT MEM
+    # limit = 1024 * 1024 * 1024  # en bytes
+    limit = 4096 * 1024 * 1024  # en bytes
+    resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+    running = True
+    try:
+        with pathlib.Path(__file__).parent.joinpath('config.json').open(mode='rt') as file:
+            config: dict = json.loads(file.read())
+        c = Config(config=config)
+        Sniffer(config=c).start()
+    except KeyboardInterrupt:
+        sys.exit(0)
