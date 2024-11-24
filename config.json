@@ -1,0 +1,21 @@
+{
+  "sniffer": {
+    "cache": {
+      "timeout": 10
+    },
+    "database": {
+      "timeout": 10,
+      "path": "./data.db"
+    },
+    "view": {
+      "interfaces": [
+        "lo"
+      ],
+      "blocks": [
+        "127.0.0.0/8",
+        "192.168.0.0/16"
+      ]
+    }
+  },
+  "transport": {}
+}
